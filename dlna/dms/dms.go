@@ -529,8 +529,6 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 		const smallFileThreshold = 100 * 1024 * 1024 // 100M
 
 		if ffInfoSize > 0 && ffInfoDuration > 0 {
-			durationStr := fmt.Sprintf("%.6f", (range_.End - range_.Start).Seconds())
-
 			if partialResponse {
 				if ffInfoSize > smallFileThreshold {
 					w.Header().Set("content-range",
@@ -544,6 +542,7 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 				w.Header().Set("content-length", fmt.Sprintf("%d", ffInfoSize))
 			}
 
+			durationStr := fmt.Sprintf("%.6f", ffInfoDuration.Seconds())
 			w.Header().Set("content-duration", durationStr)
 			w.Header().Set("x-content-duration", durationStr)
 		}
@@ -572,8 +571,6 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 		return
 	}
 	defer p.Close()
-
-	log.Printf("Response Headers: %v", w.Header())
 
 	// I recently switched this to returning 200 if no range is specified for
 	// pure UPnP clients. It's possible that DLNA clients will *always* expect
