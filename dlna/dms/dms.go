@@ -526,20 +526,26 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 
 	var logTsName string
 	if !dynamicMode {
+		const smallFileThreshold = 100 * 1024 * 1024 // 100M
+
 		if ffInfoSize > 0 && ffInfoDuration > 0 {
 			durationStr := fmt.Sprintf("%.6f", (range_.End - range_.Start).Seconds())
 
 			if partialResponse {
-				w.Header().Set("content-range",
-					fmt.Sprintf("bytes %d-%d/%d", range_.StartByte, range_.EndByte, ffInfoSize))
-			} else {
+				if ffInfoSize > smallFileThreshold {
+					w.Header().Set("content-range",
+						fmt.Sprintf("bytes %d-%d/%d", range_.StartByte, range_.EndByte, ffInfoSize))
+					w.Header().Set("content-length", fmt.Sprintf("%d", range_.EndByte-range_.StartByte+1))
+				} else {
+					w.Header().Set("Transfer-Encoding", "chunked")
+				}
+			} else if ffInfoSize > smallFileThreshold {
 				w.Header().Set("accept-ranges", "bytes")
+				w.Header().Set("content-length", fmt.Sprintf("%d", ffInfoSize))
 			}
 
 			w.Header().Set("content-duration", durationStr)
 			w.Header().Set("x-content-duration", durationStr)
-			w.Header().Set("accept-ranges", "bytes")
-			w.Header().Set("content-length", fmt.Sprintf("%d", range_.EndByte-range_.StartByte+1))
 		}
 
 		logTsName = filepath.Join(tsname, filepath.Base(path_))
@@ -566,6 +572,8 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 		return
 	}
 	defer p.Close()
+
+	log.Printf("Response Headers: %v", w.Header())
 
 	// I recently switched this to returning 200 if no range is specified for
 	// pure UPnP clients. It's possible that DLNA clients will *always* expect

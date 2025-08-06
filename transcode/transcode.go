@@ -63,7 +63,7 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 		}
 
 		inputIndex = int(indexF)
-		streamAlias = "0:" + key + ":" + strconv.Itoa(inputIndex)
+		streamAlias = "0:" + strconv.Itoa(inputIndex)
 
 		return
 	}
@@ -90,16 +90,17 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 			outputVideoIndex++
 		case "audio":
 			_, streamAlias := getStreamAlias("a", stream)
+			defaultFilter := true
 
 			switch stream["codec_name"] {
-			case "aac", "dca", "ac3", "mp2":
+			case "aac", "dca", "ac3", "mp2", "mp3", "opus", "flac", "pcm_s16le":
 				args = append(args,
 					"-map", streamAlias,
 					"-c:a:"+strconv.Itoa(outputAudioIndex), "ac3",
 					"-b:a:"+strconv.Itoa(outputAudioIndex), "224k",
 					"-ac:a:"+strconv.Itoa(outputAudioIndex), "2",
 				)
-			case "eac3":
+			case "eac3", "dts":
 				args = append(args,
 					"-map", streamAlias,
 					"-c:a:"+strconv.Itoa(outputAudioIndex), "ac3",
@@ -107,27 +108,33 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 					"-ac:a:"+strconv.Itoa(outputAudioIndex), "2",
 				)
 			case "truehd":
-				if channelsJ, ok := stream["channels"].(json.Number); ok {
-					channelsI, _ := channelsJ.Int64()
-					if channelsI > 6 {
-						continue
-					}
-				}
-
 				args = append(args,
 					"-map", streamAlias,
 					"-c:a:"+strconv.Itoa(outputAudioIndex), "ac3",
 					"-b:a:"+strconv.Itoa(outputAudioIndex), "640k",
-					"-ac:a:"+strconv.Itoa(outputAudioIndex), "2",
+					"-ac:a:"+strconv.Itoa(outputAudioIndex), "6",
+					"-ar:a:"+strconv.Itoa(outputAudioIndex), "48000",
+					"-sample_fmt:a:3"+strconv.Itoa(outputAudioIndex), "fltp",
+					"-filter:a:"+strconv.Itoa(outputAudioIndex),
+					"aresample=ocl=stereo:async=10000:first_pts=0,"+
+						"channelmap=channel_layout=5.1",
 				)
+
+				defaultFilter = false
 			default:
-				continue
+				args = append(args,
+					"-map", streamAlias,
+					"-c:a:"+strconv.Itoa(outputAudioIndex), "copy",
+				)
+				defaultFilter = false
 			}
 
-			args = append(args,
-				"-filter:a:"+strconv.Itoa(outputAudioIndex),
-				"aresample=async=1000000:first_pts=0",
-			)
+			if defaultFilter {
+				args = append(args,
+					"-filter:a:"+strconv.Itoa(outputAudioIndex),
+					"aresample=async=10000:first_pts=0",
+				)
+			}
 
 			outputAudioIndex++
 		case "subtitle":
@@ -159,10 +166,6 @@ func Transcode(ctx context.Context, path string, start, length time.Duration, st
 		"-ss", FormatDurationSexagesimal(start),
 	}
 	if length >= 0 {
-		if length < time.Millisecond*100 {
-			length = time.Millisecond * 100
-		}
-
 		args = append(args, []string{
 			"-t", FormatDurationSexagesimal(length),
 		}...)
@@ -226,10 +229,6 @@ func ChromecastTranscode(ctx context.Context, path string, start, length time.Du
 		"-force_key_frames", "expr:gte(n,n_forced*48)",
 	} // +empty_moov
 	if length > 0 {
-		if length < time.Millisecond*100 {
-			length = time.Millisecond * 100
-		}
-
 		args = append(args, []string{
 			"-t", FormatDurationSexagesimal(length),
 		}...)

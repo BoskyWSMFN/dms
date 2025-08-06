@@ -2,6 +2,7 @@ package dlna
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -117,7 +118,7 @@ func calculateNPTPosition(bytePos, totalSize int64, duration time.Duration) time
 	nanos := new(big.Rat).Mul(position, new(big.Rat).SetInt64(int64(duration)))
 
 	durNanos, _ := nanos.Float64()
-	return time.Duration(durNanos)
+	return time.Duration(math.Round(durNanos))
 }
 
 func ParseHTTPRangeToNPTRange(rangeHeader string, totalSize int64, duration time.Duration) (NPTRange, error) {
