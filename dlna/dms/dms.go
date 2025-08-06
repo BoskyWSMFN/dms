@@ -2,6 +2,7 @@ package dms
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/xml"
 	"errors"
@@ -62,7 +63,7 @@ type transcodeSpec struct {
 	mimeType        string
 	DLNAProfileName string
 	DLNAFlags       string
-	Transcode       func(path string, start, length time.Duration, stderr io.Writer) (r io.ReadCloser, err error)
+	Transcode       func(ctx context.Context, path string, start, length time.Duration, stderr io.Writer) (r io.ReadCloser, err error)
 }
 
 var transcodes = map[string]transcodeSpec{
@@ -258,6 +259,8 @@ type Server struct {
 	LogHeaders bool
 	// Disable transcoding, and the resource elements implied in the CDS.
 	NoTranscode bool
+	// Enable DVB transcoding as default.
+	DefaultTranscode bool
 	// Force transcoding to certain format of the 'transcodes' map
 	ForceTranscodeTo string
 	// Disable media probing with ffprobe
@@ -384,24 +387,94 @@ func parseDLNARangeHeader(val string) (ret dlna.NPTRange, err error) {
 // Determines the time-based range to transcode, and sets the appropriate
 // headers. Returns !ok if there was an error and the caller should stop
 // handling the request.
-func handleDLNARange(w http.ResponseWriter, hs http.Header, dynamicMode bool) (r dlna.NPTRange, partialResponse, ok bool) {
-	if dynamicMode || len(hs[http.CanonicalHeaderKey(dlna.TimeSeekRangeDomain)]) == 0 {
+func handleDLNARange(
+	w http.ResponseWriter,
+	hs http.Header,
+	dynamicMode bool,
+	totalSize int64,
+	duration time.Duration) (r dlna.NPTRange, partialResponse, ok bool) {
+	if dynamicMode {
 		ok = true
+
 		return
 	}
-	partialResponse = true
-	h := hs.Get(dlna.TimeSeekRangeDomain)
-	r, err := parseDLNARangeHeader(h)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+
+	var err error
+
+	if h := hs.Get(dlna.TimeSeekRangeDomain); h != "" {
+		partialResponse = true
+
+		r, err = parseDLNARangeHeader(h)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		// Passing an exact NPT duration seems to cause trouble pass the "iono"
+		// (*) duration instead.
+		//
+		// TODO: Check that the request range can't already have /.
+		w.Header().Set(dlna.TimeSeekRangeDomain, h+"/*")
+
+		ok = true
+
 		return
 	}
-	// Passing an exact NPT duration seems to cause trouble pass the "iono"
-	// (*) duration instead.
-	//
-	// TODO: Check that the request range can't already have /.
-	w.Header().Set(dlna.TimeSeekRangeDomain, h+"/*")
+
+	if h := hs.Get("Range"); h != "" {
+		r, err = dlna.ParseHTTPRangeToNPTRange(h, totalSize, duration)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		partialResponse = true
+		ok = true
+
+		w.Header().Set(dlna.TimeSeekRangeDomain,
+			fmt.Sprintf("npt=%s-%s/*", dlna.FormatNPTTime(r.Start), dlna.FormatNPTTime(r.End)))
+
+		return
+	}
+
+	r = dlna.NPTRange{
+		End:     duration,
+		EndByte: totalSize - 1,
+	}
+
 	ok = true
+	return
+}
+
+func getSizeFromFFInfo(ffInfo *ffprobe.Info) (size int64) {
+	if ffInfo == nil {
+		return
+	}
+
+	sizeRaw, exist := ffInfo.Format["size"]
+	if !exist {
+		return
+	}
+
+	sizeStr, ok := sizeRaw.(string)
+	if !ok {
+		return
+	}
+
+	_, _ = fmt.Sscan(sizeStr, &size)
+
+	return
+}
+
+func getDurationFromFFInfo(ffInfo *ffprobe.Info) (duration time.Duration) {
+	if ffInfo == nil {
+		return
+	}
+
+	duration, _ = ffInfo.Duration()
+
 	return
 }
 
@@ -424,15 +497,27 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 		ProfileName:     ts.DLNAProfileName,
 		Flags:           ts.DLNAFlags,
 	}).String())
+
+	var (
+		ffInfo         *ffprobe.Info
+		ffInfoSize     int64
+		ffInfoDuration time.Duration
+	)
+
+	if !dynamicMode {
+		ffInfo, _ = me.ffmpegProbe(path_)
+		ffInfoSize = getSizeFromFFInfo(ffInfo)
+		ffInfoDuration = getDurationFromFFInfo(ffInfo)
+	}
+
 	// If a range of any kind is given, we have to respond with 206 if we're
-	// interpreting that range. Since only the DLNA range is handled in this
-	// function, it alone determines if we'll give a partial response.
-	range_, partialResponse, ok := handleDLNARange(w, r.Header, dynamicMode)
+	// interpreting that range.
+	range_, partialResponse, ok := handleDLNARange(w, r.Header, dynamicMode, ffInfoSize, ffInfoDuration)
 	if !ok {
 		return
 	}
 
-	// Samsung Frame TVs send a HEAD request first. If we don't terminate processing here,
+	// Samsung Frame TVs send a HEAD request first. If we don't terminate processing here,ok = true
 	// the TV will keep reading the data and crash eventually :)
 	if r.Method == "HEAD" {
 		writeResponseCode(w, partialResponse)
@@ -441,13 +526,20 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 
 	var logTsName string
 	if !dynamicMode {
-		ffInfo, _ := me.ffmpegProbe(path_)
-		if ffInfo != nil {
-			if duration, err := ffInfo.Duration(); err == nil {
-				s := fmt.Sprintf("%f", duration.Seconds())
-				w.Header().Set("content-duration", s)
-				w.Header().Set("x-content-duration", s)
+		if ffInfoSize > 0 && ffInfoDuration > 0 {
+			durationStr := fmt.Sprintf("%.6f", (range_.End - range_.Start).Seconds())
+
+			if partialResponse {
+				w.Header().Set("content-range",
+					fmt.Sprintf("bytes %d-%d/%d", range_.StartByte, range_.EndByte, ffInfoSize))
+			} else {
+				w.Header().Set("accept-ranges", "bytes")
 			}
+
+			w.Header().Set("content-duration", durationStr)
+			w.Header().Set("x-content-duration", durationStr)
+			w.Header().Set("accept-ranges", "bytes")
+			w.Header().Set("content-length", fmt.Sprintf("%d", range_.EndByte-range_.StartByte+1))
 		}
 
 		logTsName = filepath.Join(tsname, filepath.Base(path_))
@@ -467,18 +559,20 @@ func (me *Server) serveDLNATranscode(w http.ResponseWriter, r *http.Request, pat
 		}
 		logFile = aLogFile
 	}
-	p, err := ts.Transcode(path_, range_.Start, range_.End-range_.Start, logFile)
+
+	p, err := ts.Transcode(r.Context(), path_, range_.Start, range_.End-range_.Start, logFile)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer p.Close()
+
 	// I recently switched this to returning 200 if no range is specified for
 	// pure UPnP clients. It's possible that DLNA clients will *always* expect
 	// 206. It appears the HTTP standard requires that 206 only be used if a
 	// response is not interpreting any range headers.
 	writeResponseCode(w, partialResponse)
-	io.Copy(w, p)
+	_, _ = io.Copy(w, p)
 }
 
 func init() {
@@ -868,6 +962,9 @@ func (server *Server) initMux(mux *http.ServeMux) {
 			k = server.ForceTranscodeTo
 		} else {
 			k = r.URL.Query().Get("transcode")
+			if k == "" && server.DefaultTranscode {
+				k = "t"
+			}
 		}
 		mimeType, err := MimeTypeByPath(filePath)
 		if k == "" || mimeType.IsImage() {

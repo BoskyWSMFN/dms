@@ -2,6 +2,8 @@ package dlna
 
 import (
 	"fmt"
+	"math/big"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -82,7 +84,10 @@ func FormatNPTTime(npt time.Duration) string {
 }
 
 type NPTRange struct {
-	Start, End time.Duration
+	Start     time.Duration // NPT start time
+	End       time.Duration // NPT end time
+	StartByte int64         // Byte offset start
+	EndByte   int64         // Byte offset end (inclusive)
 }
 
 func ParseNPTRange(s string) (ret NPTRange, err error) {
@@ -100,6 +105,71 @@ func ParseNPTRange(s string) (ret NPTRange, err error) {
 		}
 	}
 	return
+}
+
+// calculateNPTPosition calculates the NPT position with high precision
+func calculateNPTPosition(bytePos, totalSize int64, duration time.Duration) time.Duration {
+	if totalSize <= 0 {
+		return 0
+	}
+
+	position := new(big.Rat).SetFrac64(bytePos, totalSize)
+	nanos := new(big.Rat).Mul(position, new(big.Rat).SetInt64(int64(duration)))
+
+	durNanos, _ := nanos.Float64()
+	return time.Duration(durNanos)
+}
+
+func ParseHTTPRangeToNPTRange(rangeHeader string, totalSize int64, duration time.Duration) (NPTRange, error) {
+	const prefix = "bytes="
+
+	if rangeHeader == prefix+"0-" || rangeHeader == prefix+"0-"+strconv.FormatInt(totalSize-1, 10) {
+		return NPTRange{
+			End:     duration,
+			EndByte: totalSize - 1,
+		}, nil
+	}
+
+	if !strings.HasPrefix(rangeHeader, prefix) {
+		return NPTRange{}, fmt.Errorf("unsupported range format: %q", rangeHeader)
+	}
+
+	rangeSpec := strings.TrimPrefix(rangeHeader, prefix)
+	parts := strings.SplitN(rangeSpec, "-", 2)
+	if len(parts) != 2 {
+		return NPTRange{}, fmt.Errorf("invalid range format")
+	}
+
+	startByte, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return NPTRange{}, fmt.Errorf("invalid start byte value")
+	}
+
+	endByte := totalSize - 1
+	if parts[1] != "" {
+		endByte, err = strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			return NPTRange{}, fmt.Errorf("invalid end byte value")
+		}
+	}
+
+	if startByte < 0 || endByte >= totalSize || startByte > endByte {
+		return NPTRange{}, fmt.Errorf("range out of bounds")
+	}
+
+	startTime := calculateNPTPosition(startByte, totalSize, duration)
+	endTime := calculateNPTPosition(endByte+1, totalSize, duration)
+
+	if endTime > duration {
+		endTime = duration
+	}
+
+	return NPTRange{
+		Start:     startTime,
+		End:       endTime,
+		StartByte: startByte,
+		EndByte:   endByte,
+	}, nil
 }
 
 func (me NPTRange) String() (ret string) {

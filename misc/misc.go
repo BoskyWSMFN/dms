@@ -19,3 +19,8 @@ func FormatDurationSexagesimal(d time.Duration) string {
 	ret = strings.TrimRight(ret, ".")
 	return ret
 }
+
+//func FormatDurationSexagesimal(d time.Duration) string {
+//	return fmt.Sprintf("%02d:%02d:%06.3f",
+//		int(d.Hours()), int(d.Minutes())%60, float64(d.Seconds())-float64(int(d.Minutes())*60))
+//}

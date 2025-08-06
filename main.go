@@ -42,6 +42,7 @@ type dmsConfig struct {
 	LogHeaders          bool
 	FFprobeCachePath    string
 	NoTranscode         bool
+	DefaultTranscode    bool
 	ForceTranscodeTo    string
 	NoProbe             bool
 	StallEventSubscribe bool
@@ -139,6 +140,7 @@ func mainErr() error {
 	forceTranscodeTo := flag.String("forceTranscodeTo", config.ForceTranscodeTo, "force transcoding to certain format, supported: 'chromecast', 'vp8', 'web'")
 	transcodeLogPattern := flag.String("transcodeLogPattern", "", "pattern where to write transcode logs to. The [tsname] placeholder is replaced with the name of the item currently being played. The default is $HOME/.dms/log/[tsname]")
 	flag.BoolVar(&config.NoTranscode, "noTranscode", false, "disable transcoding")
+	flag.BoolVar(&config.DefaultTranscode, "defaultTranscode", false, "default transcoding to MPEG_PS_PAL format if not other format provided")
 	flag.BoolVar(&config.NoProbe, "noProbe", false, "disable media probing with ffprobe")
 	flag.BoolVar(&config.StallEventSubscribe, "stallEventSubscribe", false, "workaround for some bad event subscribers")
 	flag.DurationVar(&config.NotifyInterval, "notifyInterval", 30*time.Second, "interval between SSPD announces")
@@ -234,6 +236,7 @@ func mainErr() error {
 		LogHeaders:          config.LogHeaders,
 		NoTranscode:         config.NoTranscode,
 		AllowDynamicStreams: config.AllowDynamicStreams,
+		DefaultTranscode:    config.DefaultTranscode,
 		ForceTranscodeTo:    config.ForceTranscodeTo,
 		TranscodeLogPattern: config.TranscodeLogPattern,
 		NoProbe:             config.NoProbe,
