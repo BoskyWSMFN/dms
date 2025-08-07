@@ -116,7 +116,7 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 					"-ar:a:"+strconv.Itoa(outputAudioIndex), "48000",
 					"-sample_fmt:a:3"+strconv.Itoa(outputAudioIndex), "fltp",
 					"-filter:a:"+strconv.Itoa(outputAudioIndex),
-					"aresample=ocl=stereo:async=10000:first_pts=0,"+
+					"aresample=ocl=stereo:async=10000,"+
 						"channelmap=channel_layout=5.1",
 				)
 
@@ -132,22 +132,25 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 			if defaultFilter {
 				args = append(args,
 					"-filter:a:"+strconv.Itoa(outputAudioIndex),
-					"aresample=async=10000:first_pts=0",
+					"aresample=async=10000",
 				)
 			}
 
 			outputAudioIndex++
 		case "subtitle":
+			_, streamAlias := getStreamAlias("s", stream)
+
 			switch stream["codec_name"] {
 			case "srt", "dvdsub":
-				_, streamAlias := getStreamAlias("s", stream)
-
 				args = append(args,
 					"-map", streamAlias,
 					"-c:s:"+strconv.Itoa(outputSubtitleIndex), "dvbsub", "-fix_sub_duration", "-canvas_size", "720x576",
 				)
 			default:
-				continue
+				args = append(args,
+					"-map", streamAlias,
+					"-c:s:"+strconv.Itoa(outputSubtitleIndex), "copy",
+				)
 			}
 
 			outputSubtitleIndex++
@@ -162,7 +165,6 @@ func Transcode(ctx context.Context, path string, start, length time.Duration, st
 	args := []string{
 		"ffmpeg",
 		"-threads", strconv.FormatInt(int64(runtime.NumCPU()), 10),
-		//"-async", "1",
 		"-ss", FormatDurationSexagesimal(start),
 	}
 	if length >= 0 {
@@ -184,7 +186,6 @@ func Transcode(ctx context.Context, path string, start, length time.Duration, st
 		"-mpegts_flags", "+resend_headers+initial_discontinuity",
 		"-mpegts_service_type", "digital_tv",
 		"-fflags", "+genpts+flush_packets", "-avoid_negative_ts", "make_zero",
-		"-reset_timestamps", "1",
 		"-frag_duration", "1000000",
 		"-final_delay", "0.7",
 		"-muxdelay", "0.7", "-muxpreload", "0",
