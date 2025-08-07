@@ -74,6 +74,8 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 		outputSubtitleIndex int
 	)
 
+	canvas := "720x576"
+
 	for _, stream := range streams {
 		switch stream["codec_type"] {
 		case "video":
@@ -98,9 +100,8 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 					"-flags:v:"+strconv.Itoa(outputVideoIndex), "+ilme+ildct",
 					"-filter:v:"+strconv.Itoa(outputVideoIndex), "fieldorder=tff",
 					"-aspect:v:"+strconv.Itoa(outputVideoIndex), "16:9",
-					"-s:v:"+strconv.Itoa(outputVideoIndex), "720x576",
+					"-s:v:"+strconv.Itoa(outputVideoIndex), canvas,
 					"-r:v:"+strconv.Itoa(outputVideoIndex), "25",
-					"-vsync", "cfr",
 				)
 			}
 
@@ -161,23 +162,25 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 			case "srt", "dvdsub":
 				args = append(args,
 					"-map", streamAlias,
-					"-c:s:"+strconv.Itoa(outputSubtitleIndex), "dvbsub", "-fix_sub_duration", "-canvas_size", "720x576",
+					"-c:s:"+strconv.Itoa(outputSubtitleIndex), "dvbsub", "-fix_sub_duration", "-canvas_size", canvas,
 				)
 			default:
-				args = append(args,
-					"-map", streamAlias,
-					"-c:s:"+strconv.Itoa(outputSubtitleIndex), "copy",
-				)
+				continue
+				//args = append(args,
+				//	"-map", streamAlias,
+				//	"-c:s:"+strconv.Itoa(outputSubtitleIndex), "copy",
+				//)
 			}
 
 			outputSubtitleIndex++
 		default:
-			_, streamAlias := getStreamAlias(stream)
-
-			args = append(args,
-				"-map", streamAlias,
-				"-c", "copy",
-			)
+			continue
+			//_, streamAlias := getStreamAlias(stream)
+			//
+			//args = append(args,
+			//	"-map", streamAlias,
+			//	"-c", "copy",
+			//)
 		}
 	}
 
@@ -192,20 +195,21 @@ func Transcode(ctx context.Context, path string, start, length time.Duration, st
 		"-ss", FormatDurationSexagesimal(start),
 	}
 	if length >= 0 {
-		args = append(args, []string{
+		args = append(args,
 			"-t", FormatDurationSexagesimal(length),
-		}...)
+		)
 	}
-	args = append(args, []string{
+	args = append(args,
+		"-vsync", "cfr",
 		"-i", path,
-	}...)
+	)
 	info, err := ffprobe.Run(path)
 	if err != nil {
 		return
 	}
 
 	args = append(args, generateStreamArgs(info.Streams)...)
-	args = append(args, []string{
+	args = append(args,
 		"-f", "mpegts",
 		"-mpegts_flags", "+resend_headers+initial_discontinuity",
 		"-mpegts_service_type", "digital_tv",
@@ -214,7 +218,8 @@ func Transcode(ctx context.Context, path string, start, length time.Duration, st
 		"-final_delay", "0.7",
 		"-muxdelay", "0.7", "-muxpreload", "0",
 		"-flush_packets", "1",
-		"pipe:"}...)
+		"pipe:",
+	)
 	return transcodePipe(ctx, args, stderr)
 }
 
