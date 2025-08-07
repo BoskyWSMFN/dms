@@ -55,7 +55,7 @@ func transcodePipe(ctx context.Context, args []string, stderr io.Writer) (r io.R
 // Return a series of ffmpeg arguments that pick specific codecs for specific
 // streams. This requires use of the -map flag.
 func generateStreamArgs(streams []map[string]interface{}) (args []string) {
-	getStreamAlias := func(key string, stream map[string]interface{}) (inputIndex int, streamAlias string) {
+	getStreamAlias := func(stream map[string]interface{}) (inputIndex int, streamAlias string) {
 		indexF, ok := stream["index"].(float64)
 		if !ok {
 			indexJN, _ := stream["index"].(json.Number)
@@ -77,19 +77,36 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 	for _, stream := range streams {
 		switch stream["codec_type"] {
 		case "video":
-			_, streamAlias := getStreamAlias("v", stream)
+			_, streamAlias := getStreamAlias(stream)
 
-			args = append(args,
-				"-map", streamAlias,
-				"-c:v:"+strconv.Itoa(outputVideoIndex), "mpeg2video",
-				"-b:v:"+strconv.Itoa(outputVideoIndex), "6000k", "-maxrate", "8000k", "-bufsize", "1835k", "-minrate", "3000k",
-				"-g", "15", "-bf", "2", "-flags", "+ilme+ildct", "-vf", "fieldorder=tff",
-				"-aspect", "16:9", "-s", "720x576", "-r", "25", "-vsync", "cfr",
-			)
+			switch stream["codec_name"] {
+			case "mjpeg", "png", "bmp", "webp", "tiff", "j2k", "jpeg2000":
+				args = append(args,
+					"-map", streamAlias,
+					"-c:v:"+strconv.Itoa(outputVideoIndex), "copy",
+				)
+			default:
+				args = append(args,
+					"-map", streamAlias,
+					"-c:v:"+strconv.Itoa(outputVideoIndex), "mpeg2video",
+					"-b:v:"+strconv.Itoa(outputVideoIndex), "6000k",
+					"-minrate:v:"+strconv.Itoa(outputVideoIndex), "3000k",
+					"-maxrate:v:"+strconv.Itoa(outputVideoIndex), "8000k",
+					"-bufsize:v:"+strconv.Itoa(outputVideoIndex), "1835k",
+					"-g:v:"+strconv.Itoa(outputVideoIndex), "15",
+					"-bf:v:"+strconv.Itoa(outputVideoIndex), "2",
+					"-flags:v:"+strconv.Itoa(outputVideoIndex), "+ilme+ildct",
+					"-filter:v:"+strconv.Itoa(outputVideoIndex), "fieldorder=tff",
+					"-aspect:v:"+strconv.Itoa(outputVideoIndex), "16:9",
+					"-s:v:"+strconv.Itoa(outputVideoIndex), "720x576",
+					"-r:v:"+strconv.Itoa(outputVideoIndex), "25",
+					"-vsync", "cfr",
+				)
+			}
 
 			outputVideoIndex++
 		case "audio":
-			_, streamAlias := getStreamAlias("a", stream)
+			_, streamAlias := getStreamAlias(stream)
 			defaultFilter := true
 
 			switch stream["codec_name"] {
@@ -138,7 +155,7 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 
 			outputAudioIndex++
 		case "subtitle":
-			_, streamAlias := getStreamAlias("s", stream)
+			_, streamAlias := getStreamAlias(stream)
 
 			switch stream["codec_name"] {
 			case "srt", "dvdsub":
@@ -154,6 +171,13 @@ func generateStreamArgs(streams []map[string]interface{}) (args []string) {
 			}
 
 			outputSubtitleIndex++
+		default:
+			_, streamAlias := getStreamAlias(stream)
+
+			args = append(args,
+				"-map", streamAlias,
+				"-c", "copy",
+			)
 		}
 	}
 
